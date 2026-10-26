@@ -1,487 +1,1013 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import React, { useState, useEffect } from "react";
 import {
-  Home, Plus, CheckCircle, AlertCircle, Clock, Trash2,
-  FileText, ChevronDown, ChevronUp, Phone, MapPin, Calendar,
-  DollarSign, TrendingUp, User, X, Download, Shield, Bell
+  Property,
+  PaymentRecord,
+  PaymentStatus,
+  DefectEvidence,
+  CautionFeeTracker,
+  PropertyExpense,
+  Announcement,
+  ChatMessage,
+  AgentApplication,
+  AppNotification,
+  UserRole,
+  TenantProfile,
+  AgentProfile,
+  OwnerProfile,
+  UserSession,
+} from "@/types/property";
+import {
+  loadProperties,
+  saveProperties,
+  loadAnnouncements,
+  saveAnnouncements,
+  loadChats,
+  saveChats,
+  loadAgents,
+  saveAgents,
+  loadNotifications,
+  saveNotifications,
+  loadTenantProfile,
+  saveTenantProfile,
+  loadAgentProfile,
+  saveAgentProfile,
+  loadOwnerProfile,
+  saveOwnerProfile,
+  loadSession,
+  saveSession,
+  clearSession,
+  resetAllDataToSeed,
+} from "@/lib/storage";
+import {
+  DEFAULT_TENANT_PROFILE,
+  DEFAULT_AGENT_PROFILE,
+  DEFAULT_OWNER_PROFILE,
+} from "@/lib/constants";
+import { Navbar } from "@/components/common/Navbar";
+import { LandingPage } from "@/components/home/LandingPage";
+import { Sidebar } from "@/components/Sidebar";
+import { PropertyHeader } from "@/components/PropertyHeader";
+import { OverviewTab } from "@/components/tabs/OverviewTab";
+import { PaymentsTab } from "@/components/tabs/PaymentsTab";
+import { DefectsTab } from "@/components/tabs/DefectsTab";
+import { CautionTrackerTab } from "@/components/tabs/CautionTrackerTab";
+import { NotesTab } from "@/components/tabs/NotesTab";
+import { TenantLeaseCountdown } from "@/components/tenant/TenantLeaseCountdown";
+import { TenantDocumentsVault } from "@/components/tenant/TenantDocumentsVault";
+import { TwoWayChat } from "@/components/chat/TwoWayChat";
+import { AdminRevenueExpenses } from "@/components/admin/AdminRevenueExpenses";
+import { AdminAnnouncements } from "@/components/admin/AdminAnnouncements";
+import { AdminTenantDirectory } from "@/components/admin/AdminTenantDirectory";
+import { AdminAgentApprovals } from "@/components/admin/AdminAgentApprovals";
+import { TenantProfileSettings } from "@/components/profile/TenantProfileSettings";
+import { OwnerProfileSettings } from "@/components/profile/OwnerProfileSettings";
+import { AgentDashboard } from "@/components/agent/AgentDashboard";
+import { AuthModal } from "@/components/auth/AuthModals";
+import { AddPropertyModal } from "@/components/modals/AddPropertyModal";
+import { EditPropertyModal } from "@/components/modals/EditPropertyModal";
+import { AddPaymentModal } from "@/components/modals/AddPaymentModal";
+import { AdminIssueReceiptModal } from "@/components/modals/AdminIssueReceiptModal";
+import { ReceiptModal } from "@/components/modals/ReceiptModal";
+import { DeleteConfirmModal } from "@/components/modals/DeleteConfirmModal";
+import { useToast } from "@/components/common/Toast";
+import {
+  Home,
+  CreditCard,
+  Camera,
+  ShieldAlert,
+  FileText,
+  Clock,
+  FolderLock,
+  MessageSquare,
+  TrendingUp,
+  Megaphone,
+  Users,
+  Award,
+  PlusCircle,
+  Building2,
+  Sparkles,
+  Settings,
+  Shield,
+  Briefcase,
+  Lock,
+  UserCheck,
+  ArrowRight,
+  ShieldCheck,
+  CheckCircle2,
 } from "lucide-react";
 
-type PaymentStatus = "paid" | "pending" | "overdue";
-type RentFrequency = "monthly" | "quarterly" | "annually";
+export default function TrustRentMain() {
+  const [userRole, setUserRole] = useState<UserRole>("guest");
+  const [session, setSession] = useState<UserSession | null>(null);
+  const [currentUserEmail, setCurrentUserEmail] = useState("");
+  const [authRoleTarget, setAuthRoleTarget] = useState<UserRole>("tenant");
 
-interface PaymentRecord {
-  id: string;
-  period: string;
-  amount: number;
-  dueDate: string;
-  paidDate?: string;
-  status: PaymentStatus;
-  receiptNo?: string;
-}
+  // Profiles for Tenant, Agent, and Owner
+  const [tenantProfile, setTenantProfile] = useState<TenantProfile>(DEFAULT_TENANT_PROFILE);
+  const [agentProfile, setAgentProfile] = useState<AgentProfile>(DEFAULT_AGENT_PROFILE);
+  const [ownerProfile, setOwnerProfile] = useState<OwnerProfile>(DEFAULT_OWNER_PROFILE);
 
-interface Property {
-  id: string;
-  address: string;
-  area: string;
-  city: string;
-  landlordName: string;
-  landlordPhone: string;
-  agentName?: string;
-  agentPhone?: string;
-  rentAmount: number;
-  frequency: RentFrequency;
-  startDate: string;
-  endDate: string;
-  cautionFee: number;
-  agentFee: number;
-  payments: PaymentRecord[];
-  notes: string;
-  status: "active" | "expired" | "terminated";
-}
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [selectedId, setSelectedId] = useState<string>("");
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [chats, setChats] = useState<ChatMessage[]>([]);
+  const [agents, setAgents] = useState<AgentApplication[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isClient, setIsClient] = useState(false);
 
-function genId() { return Math.random().toString(36).slice(2, 9); }
+  // Active view tab inside Super Admin or Tenant portal
+  const [adminTab, setAdminTab] = useState<
+    "properties" | "revenue" | "directory" | "announcements" | "agents" | "chat" | "settings"
+  >("properties");
+  const [tenantTab, setTenantTab] = useState<
+    "countdown" | "vault" | "payments" | "defects" | "caution" | "chat" | "notes" | "profile"
+  >("countdown");
 
-function fmtNaira(n: number) {
-  return "₦" + new Intl.NumberFormat("en-NG").format(n);
-}
-
-function daysUntil(dateStr: string): number {
-  return Math.ceil((new Date(dateStr).getTime() - Date.now()) / 86400000);
-}
-
-const SEED_PROPERTIES: Property[] = [
-  {
-    id: "prop1",
-    address: "12B Okoye Close",
-    area: "GRA",
-    city: "Benin City",
-    landlordName: "Chief Emmanuel Eze",
-    landlordPhone: "08031234567",
-    agentName: "Mr. Rotimi Adeyemi",
-    agentPhone: "07051234567",
-    rentAmount: 600000,
-    frequency: "annually",
-    startDate: "2025-04-01",
-    endDate: "2026-03-31",
-    cautionFee: 150000,
-    agentFee: 60000,
-    notes: "Gate painted green. Water heater in master bathroom needs fixing. Landlord prefers payments by 31st.",
-    status: "active",
-    payments: [
-      { id: "pay1", period: "Apr 2025 – Mar 2026", amount: 600000, dueDate: "2025-04-01", paidDate: "2025-04-03", status: "paid", receiptNo: "RCT-2025-001" },
-      { id: "pay2", period: "Apr 2026 – Mar 2027", amount: 650000, dueDate: "2026-04-01", status: "pending" },
-    ],
-  },
-  {
-    id: "prop2",
-    address: "Flat 4, Sunrise Estate",
-    area: "Ugbowo",
-    city: "Benin City",
-    landlordName: "Mrs. Patience Okafor",
-    landlordPhone: "08091234567",
-    rentAmount: 350000,
-    frequency: "annually",
-    startDate: "2024-01-15",
-    endDate: "2025-01-14",
-    cautionFee: 100000,
-    agentFee: 35000,
-    notes: "Previous apartment. Caution fee of ₦100,000 not yet refunded.",
-    status: "expired",
-    payments: [
-      { id: "pay3", period: "Jan 2024 – Jan 2025", amount: 350000, dueDate: "2024-01-15", paidDate: "2024-01-15", status: "paid", receiptNo: "RCT-2024-001" },
-    ],
-  },
-];
-
-export default function TrustRent() {
-  const [properties, setProperties] = useState<Property[]>(SEED_PROPERTIES);
-  const [selectedId, setSelectedId] = useState<string>("prop1");
-  const [tab, setTab] = useState<"overview" | "payments" | "notes">("overview");
-  const [showAddPayment, setShowAddPayment] = useState(false);
+  // Modals state
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "signup" | "forgot">("login");
   const [showAddProperty, setShowAddProperty] = useState(false);
-  const [expandNotes, setExpandNotes] = useState(false);
+  const [showEditProperty, setShowEditProperty] = useState(false);
+  const [showAddPayment, setShowAddPayment] = useState(false);
+  const [showAdminIssueReceipt, setShowAdminIssueReceipt] = useState(false);
+  const [viewingReceipt, setViewingReceipt] = useState<PaymentRecord | null>(null);
+  const [deletePropertyConfirm, setDeletePropertyConfirm] = useState(false);
 
-  const [payForm, setPayForm] = useState({ period: "", amount: "", dueDate: "", paidDate: "", status: "pending" as PaymentStatus, receiptNo: "" });
-  const [propForm, setPropForm] = useState({ address: "", area: "", city: "", landlordName: "", landlordPhone: "", rentAmount: "", frequency: "annually" as RentFrequency, startDate: "", endDate: "", cautionFee: "", agentFee: "", notes: "" });
+  const { showToast } = useToast();
 
-  const selected = properties.find(p => p.id === selectedId) ?? properties[0];
+  // Hydration
+  useEffect(() => {
+    const loadedProps = loadProperties();
+    const loadedAnn = loadAnnouncements();
+    const loadedChats = loadChats();
+    const loadedAgents = loadAgents();
+    const loadedNotifs = loadNotifications();
+    const loadedSess = loadSession();
+    const loadedTP = loadTenantProfile();
+    const loadedAP = loadAgentProfile();
+    const loadedOP = loadOwnerProfile();
 
-  const stats = useMemo(() => {
-    const allPaid = properties.flatMap(p => p.payments.filter(pay => pay.status === "paid"));
-    const allPending = properties.flatMap(p => p.payments.filter(pay => pay.status === "pending" || pay.status === "overdue"));
-    const totalPaid = allPaid.reduce((a, p) => a + p.amount, 0);
-    const totalOwed = allPending.reduce((a, p) => a + p.amount, 0);
-    const totalCaution = properties.reduce((a, p) => a + p.cautionFee, 0);
-    const totalSpent = properties.reduce((a, p) => a + p.cautionFee + p.agentFee, 0) + totalPaid;
-    return { totalPaid, totalOwed, totalCaution, totalSpent };
-  }, [properties]);
+    setProperties(loadedProps);
+    setAnnouncements(loadedAnn);
+    setChats(loadedChats);
+    setAgents(loadedAgents);
+    setNotifications(loadedNotifs);
+    setTenantProfile(loadedTP);
+    setAgentProfile(loadedAP);
+    setOwnerProfile(loadedOP);
 
-  const daysLeft = daysUntil(selected.endDate);
+    if (loadedSess) {
+      setSession(loadedSess);
+      setCurrentUserEmail(loadedSess.email);
+    }
 
-  const addPayment = () => {
-    if (!payForm.period || !payForm.amount) return;
-    const payment: PaymentRecord = {
-      id: genId(), period: payForm.period, amount: parseFloat(payForm.amount),
-      dueDate: payForm.dueDate, paidDate: payForm.paidDate || undefined,
-      status: payForm.status, receiptNo: payForm.receiptNo || undefined,
+    if (loadedProps.length > 0) {
+      setSelectedId(loadedProps[0].id);
+    }
+    setIsClient(true);
+  }, []);
+
+  // Profile and Session Handlers
+  const handleSaveTenantProfile = (updated: TenantProfile) => {
+    setTenantProfile(updated);
+    saveTenantProfile(updated);
+  };
+
+  const handleSaveAgentProfile = (updated: AgentProfile) => {
+    setAgentProfile(updated);
+    saveAgentProfile(updated);
+  };
+
+  const handleSaveOwnerProfile = (updated: OwnerProfile) => {
+    setOwnerProfile(updated);
+    saveOwnerProfile(updated);
+  };
+
+  const handleSignOut = () => {
+    clearSession();
+    setSession(null);
+    setUserRole("guest");
+    showToast("Session ended. Signed out securely.", "info");
+  };
+
+  const handleAuthSuccess = (role: UserRole, email: string, name?: string) => {
+    const newSession: UserSession = {
+      role,
+      email,
+      name: name || email.split("@")[0],
     };
-    setProperties(prev => prev.map(p => p.id === selectedId ? { ...p, payments: [...p.payments, payment] } : p));
-    setPayForm({ period: "", amount: "", dueDate: "", paidDate: "", status: "pending", receiptNo: "" });
-    setShowAddPayment(false);
+    saveSession(newSession);
+    setSession(newSession);
+    setUserRole(role);
+    setCurrentUserEmail(email);
+    setShowAuthModal(false);
   };
 
-  const addProperty = () => {
-    if (!propForm.address || !propForm.landlordName) return;
-    const prop: Property = {
-      id: genId(),
-      address: propForm.address, area: propForm.area, city: propForm.city,
-      landlordName: propForm.landlordName, landlordPhone: propForm.landlordPhone,
-      rentAmount: parseFloat(propForm.rentAmount)||0,
-      frequency: propForm.frequency,
-      startDate: propForm.startDate, endDate: propForm.endDate,
-      cautionFee: parseFloat(propForm.cautionFee)||0,
-      agentFee: parseFloat(propForm.agentFee)||0,
-      notes: propForm.notes, status: "active", payments: [],
+  const handleSwitchRole = (targetRole: UserRole) => {
+    setUserRole(targetRole);
+    if (targetRole !== "guest") {
+      setAuthRoleTarget(targetRole);
+    }
+  };
+
+  // Save Helpers
+  const updateProperties = (updated: Property[]) => {
+    setProperties(updated);
+    saveProperties(updated);
+  };
+
+  const updateAnnouncements = (updated: Announcement[]) => {
+    setAnnouncements(updated);
+    saveAnnouncements(updated);
+  };
+
+  const updateChats = (updated: ChatMessage[]) => {
+    setChats(updated);
+    saveChats(updated);
+  };
+
+  const updateAgents = (updated: AgentApplication[]) => {
+    setAgents(updated);
+    saveAgents(updated);
+  };
+
+  const updateNotifications = (updated: AppNotification[]) => {
+    setNotifications(updated);
+    saveNotifications(updated);
+  };
+
+  // Currently selected property reference
+  const selectedProperty =
+    properties.find((p) => p.id === selectedId) || properties[0] || null;
+
+  // Property Handlers
+  const handleAddProperty = (newProp: Property) => {
+    const updated = [newProp, ...properties];
+    updateProperties(updated);
+    setSelectedId(newProp.id);
+    showToast(`Property "${newProp.address}" added to your portfolio!`, "success");
+  };
+
+  const handleSaveProperty = (updatedProp: Property) => {
+    const updated = properties.map((p) =>
+      p.id === updatedProp.id ? updatedProp : p
+    );
+    updateProperties(updated);
+  };
+
+  const handleDeleteSelectedProperty = () => {
+    if (!selectedProperty) return;
+    const remaining = properties.filter((p) => p.id !== selectedProperty.id);
+    updateProperties(remaining);
+    if (remaining.length > 0) {
+      setSelectedId(remaining[0].id);
+    } else {
+      setSelectedId("");
+    }
+    showToast("Property record removed.", "info");
+  };
+
+  // Payment Handlers
+  const handleAddPayment = (newPayment: PaymentRecord) => {
+    if (!selectedProperty) return;
+    const updatedProp: Property = {
+      ...selectedProperty,
+      payments: [newPayment, ...selectedProperty.payments],
     };
-    setProperties(prev => [prop, ...prev]);
-    setSelectedId(prop.id);
-    setShowAddProperty(false);
-    setPropForm({ address: "", area: "", city: "", landlordName: "", landlordPhone: "", rentAmount: "", frequency: "annually", startDate: "", endDate: "", cautionFee: "", agentFee: "", notes: "" });
+    handleSaveProperty(updatedProp);
+    showToast("Payment record logged successfully.", "success");
   };
 
-  const STATUS_BADGE: Record<PaymentStatus, string> = {
-    paid: "badge-paid", pending: "badge-pending", overdue: "badge-overdue"
+  const handleDeletePayment = (paymentId: string) => {
+    if (!selectedProperty) return;
+    const updatedProp: Property = {
+      ...selectedProperty,
+      payments: selectedProperty.payments.filter((p) => p.id !== paymentId),
+    };
+    handleSaveProperty(updatedProp);
+    showToast("Payment record deleted.", "info");
   };
 
-  const PROP_STATUS: Record<Property["status"], { label: string; cls: string }> = {
-    active: { label: "Active", cls: "badge-active" },
-    expired: { label: "Expired", cls: "badge-overdue" },
-    terminated: { label: "Terminated", cls: "badge-pending" },
+  const handleTogglePaymentStatus = (paymentId: string, newStatus: PaymentStatus) => {
+    if (!selectedProperty) return;
+    const updatedPayments = selectedProperty.payments.map((p) => {
+      if (p.id === paymentId) {
+        return {
+          ...p,
+          status: newStatus,
+          paidDate:
+            newStatus === "paid"
+              ? p.paidDate || new Date().toISOString().split("T")[0]
+              : undefined,
+        };
+      }
+      return p;
+    });
+
+    const updatedProp: Property = {
+      ...selectedProperty,
+      payments: updatedPayments,
+    };
+    handleSaveProperty(updatedProp);
+    showToast(`Payment marked as ${newStatus}.`, "success");
   };
 
-  return (
-    <div className="min-h-screen bg-[#faf7f2]">
-      {/* Header */}
-      <header className="bg-white border-b border-[#e2d9c8] px-5 py-4 sticky top-0 z-40">
-        <div className="max-w-5xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-[#c4601a] flex items-center justify-center shadow-sm">
-              <Home size={18} className="text-white" />
-            </div>
-            <div>
-              <h1 className="font-display font-semibold text-2xl leading-none text-[#1a1208]">TrustRent</h1>
-              <p className="text-xs text-[#7a6a50]">Your rental records, organized</p>
-            </div>
-          </div>
-          <button onClick={() => setShowAddProperty(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#c4601a] text-white text-sm font-semibold hover:bg-[#a84e14] transition-all shadow-sm shadow-[#c4601a]/20">
-            <Plus size={15}/> Add Property
-          </button>
-        </div>
-      </header>
+  // Issue Official Receipt from Super Admin Side
+  const handleIssueReceiptByOwner = (payment: PaymentRecord) => {
+    if (!selectedProperty) return;
+    const updatedProp: Property = {
+      ...selectedProperty,
+      payments: [payment, ...selectedProperty.payments],
+    };
+    handleSaveProperty(updatedProp);
 
-      <div className="max-w-5xl mx-auto px-5 py-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* LEFT SIDEBAR */}
-        <div className="space-y-4">
-          {/* Summary stats */}
-          <div className="card p-4 fade-in">
-            <h3 className="font-display text-lg text-[#1a1208] mb-3">Overview</h3>
-            <div className="space-y-3">
-              <div className="flex justify-between items-center py-2 border-b border-[#e2d9c8]">
-                <span className="text-sm text-[#7a6a50]">Total Rent Paid</span>
-                <span className="font-mono font-semibold text-[#2d6a4f]">{fmtNaira(stats.totalPaid)}</span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-[#e2d9c8]">
-                <span className="text-sm text-[#7a6a50]">Outstanding</span>
-                <span className="font-mono font-semibold text-[#c1121f]">{fmtNaira(stats.totalOwed)}</span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-[#e2d9c8]">
-                <span className="text-sm text-[#7a6a50]">Caution Fees</span>
-                <span className="font-mono font-semibold text-[#c4601a]">{fmtNaira(stats.totalCaution)}</span>
-              </div>
-              <div className="flex justify-between items-center py-2">
-                <span className="text-sm font-semibold text-[#1a1208]">Total Housing Spend</span>
-                <span className="font-mono font-bold text-[#1a1208]">{fmtNaira(stats.totalSpent)}</span>
-              </div>
-            </div>
-          </div>
+    // Create notification for tenant
+    const newNotif: AppNotification = {
+      id: "notif_" + Date.now(),
+      title: "New Official Rent Receipt Issued",
+      message: `Landlord issued receipt ${payment.receiptNo} for ${selectedProperty.address}. Stored in your vault.`,
+      type: "receipt",
+      targetRole: "tenant",
+      propertyId: selectedProperty.id,
+      timestamp: "Just now",
+      read: false,
+    };
+    updateNotifications([newNotif, ...notifications]);
+  };
 
-          {/* Property list */}
-          <div className="space-y-2 fade-in delay-1">
-            <p className="text-xs font-semibold text-[#7a6a50] uppercase tracking-wide px-1">Your Properties</p>
-            {properties.map(p => (
-              <button key={p.id} onClick={() => setSelectedId(p.id)}
-                className={`w-full text-left card p-4 transition-all ${selectedId === p.id ? "border-[#c4601a] bg-[#fdf5ec]" : "hover:border-[#c4601a]/30"}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="font-semibold text-sm text-[#1a1208] truncate">{p.address}</p>
-                    <p className="text-xs text-[#7a6a50] mt-0.5 flex items-center gap-1"><MapPin size={10}/>{p.area}, {p.city}</p>
-                  </div>
-                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${PROP_STATUS[p.status].cls}`}>{PROP_STATUS[p.status].label}</span>
-                </div>
-                <p className="font-mono text-sm font-semibold text-[#c4601a] mt-2">{fmtNaira(p.rentAmount)}<span className="text-xs font-normal text-[#7a6a50]">/{p.frequency === "annually" ? "yr" : p.frequency === "monthly" ? "mo" : "qtr"}</span></p>
-              </button>
-            ))}
-          </div>
-        </div>
+  // Expense Handler (Super Admin)
+  const handleAddExpense = (expense: PropertyExpense) => {
+    const updated = properties.map((p) => {
+      if (p.id === expense.propertyId) {
+        return {
+          ...p,
+          expenses: [expense, ...(p.expenses || [])],
+        };
+      }
+      return p;
+    });
+    updateProperties(updated);
+  };
 
-        {/* MAIN CONTENT */}
-        <div className="lg:col-span-2 space-y-4">
-          {selected && (
-            <>
-              {/* Property header */}
-              <div className="card p-5 fade-in">
-                <div className="flex items-start justify-between gap-4 flex-wrap">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <h2 className="font-display text-3xl font-semibold text-[#1a1208]">{selected.address}</h2>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${PROP_STATUS[selected.status].cls}`}>{PROP_STATUS[selected.status].label}</span>
-                    </div>
-                    <p className="text-[#7a6a50] flex items-center gap-1 text-sm"><MapPin size={13}/>{selected.area}, {selected.city}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-mono font-bold text-2xl text-[#c4601a]">{fmtNaira(selected.rentAmount)}</p>
-                    <p className="text-xs text-[#7a6a50] capitalize">{selected.frequency}</p>
-                  </div>
-                </div>
+  // Announcement Handler (Super Admin Broadcast)
+  const handleAddAnnouncement = (ann: Announcement) => {
+    const updated = [ann, ...announcements];
+    updateAnnouncements(updated);
 
-                {/* Lease timeline */}
-                <div className="mt-4 p-3 rounded-xl bg-[#f0e8d8]">
-                  <div className="flex items-center justify-between text-xs text-[#7a6a50] mb-2">
-                    <span className="flex items-center gap-1"><Calendar size={11}/> Lease period</span>
-                    <span className={`font-semibold ${daysLeft < 30 ? "text-[#c1121f]" : daysLeft < 90 ? "text-[#c4601a]" : "text-[#2d6a4f]"}`}>
-                      {daysLeft > 0 ? `${daysLeft} days left` : `Expired ${Math.abs(daysLeft)} days ago`}
-                    </span>
-                  </div>
-                  <div className="h-2 rounded-full bg-[#e2d9c8] overflow-hidden">
-                    <div className="h-full rounded-full bg-[#c4601a] transition-all" style={{
-                      width: `${Math.max(0, Math.min(100, ((Date.now() - new Date(selected.startDate).getTime()) / (new Date(selected.endDate).getTime() - new Date(selected.startDate).getTime())) * 100))}%`
-                    }}/>
-                  </div>
-                  <div className="flex justify-between text-xs text-[#7a6a50] mt-1.5">
-                    <span>{selected.startDate}</span><span>{selected.endDate}</span>
-                  </div>
-                </div>
+    // Add alert notification to tenants
+    const newNotif: AppNotification = {
+      id: "notif_" + Date.now(),
+      title: ann.title,
+      message: ann.content.substring(0, 90) + "...",
+      type: "announcement",
+      targetRole: "tenant",
+      timestamp: "Just now",
+      read: false,
+    };
+    updateNotifications([newNotif, ...notifications]);
+  };
 
-                {/* Renewal alert */}
-                {daysLeft > 0 && daysLeft < 60 && (
-                  <div className="mt-3 flex items-center gap-2 p-3 rounded-xl bg-[#fee2e2] border border-[#fecaca]">
-                    <Bell size={14} className="text-[#c1121f] flex-shrink-0"/>
-                    <p className="text-xs text-[#991b1b]">Lease renews in <strong>{daysLeft} days</strong>. Contact your landlord to negotiate terms before it's too late.</p>
-                  </div>
-                )}
-              </div>
+  // Chat Handlers (Two-Way Communication)
+  const handleSendMessage = (msg: ChatMessage) => {
+    const updated = [...chats, msg];
+    updateChats(updated);
+  };
 
-              {/* Tabs */}
-              <div className="flex gap-1 bg-[#f0e8d8] rounded-xl p-1 w-fit">
-                {(["overview","payments","notes"] as const).map(t => (
-                  <button key={t} onClick={() => setTab(t)}
-                    className={`px-4 py-2 rounded-lg text-sm font-semibold capitalize transition-all ${tab === t ? "bg-white text-[#1a1208] shadow-sm" : "text-[#7a6a50] hover:text-[#1a1208]"}`}>
-                    {t}
-                  </button>
-                ))}
-              </div>
+  const handleToggleChatLock = (isLocked: boolean) => {
+    if (!selectedProperty) return;
+    const updatedProp: Property = {
+      ...selectedProperty,
+      conversationSettings: {
+        isLocked,
+        lastUpdated: new Date().toISOString().split("T")[0],
+      },
+    };
+    handleSaveProperty(updatedProp);
+  };
 
-              {/* OVERVIEW TAB */}
-              {tab === "overview" && (
-                <div className="space-y-4 fade-in">
-                  {/* Landlord / Agent contacts */}
-                  <div className="card p-5">
-                    <h3 className="font-display text-lg font-semibold text-[#1a1208] mb-4">Contacts</h3>
-                    <div className="space-y-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-[#f0e8d8] flex items-center justify-center">
-                          <User size={16} className="text-[#c4601a]"/>
-                        </div>
-                        <div className="flex-1">
-                          <p className="text-sm font-semibold text-[#1a1208]">{selected.landlordName}</p>
-                          <p className="text-xs text-[#7a6a50]">Landlord</p>
-                        </div>
-                        <a href={`tel:${selected.landlordPhone}`}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#2d6a4f]/10 text-[#2d6a4f] text-xs font-semibold hover:bg-[#2d6a4f]/20 transition-colors">
-                          <Phone size={12}/>{selected.landlordPhone}
-                        </a>
-                      </div>
-                      {selected.agentName && (
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-[#f0e8d8] flex items-center justify-center">
-                            <Shield size={16} className="text-[#7a6a50]"/>
-                          </div>
-                          <div className="flex-1">
-                            <p className="text-sm font-semibold text-[#1a1208]">{selected.agentName}</p>
-                            <p className="text-xs text-[#7a6a50]">Agent</p>
-                          </div>
-                          <a href={`tel:${selected.agentPhone}`}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#7a6a50]/10 text-[#7a6a50] text-xs font-semibold hover:bg-[#7a6a50]/20 transition-colors">
-                            <Phone size={12}/>{selected.agentPhone}
-                          </a>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+  // Agent Application & Verification Handler
+  const handleApplyAgent = (app: AgentApplication) => {
+    const updated = [app, ...agents];
+    updateAgents(updated);
 
-                  {/* Financial breakdown */}
-                  <div className="card p-5">
-                    <h3 className="font-display text-lg font-semibold text-[#1a1208] mb-4">Financial Summary</h3>
-                    <div className="space-y-2">
-                      {[
-                        { label: "Annual Rent", value: selected.rentAmount, color: "#c4601a" },
-                        { label: "Caution Fee (refundable)", value: selected.cautionFee, color: "#2d6a4f" },
-                        { label: "Agent Fee (non-refundable)", value: selected.agentFee, color: "#7a6a50" },
-                        { label: "Total Initial Outlay", value: selected.rentAmount + selected.cautionFee + selected.agentFee, color: "#1a1208", bold: true },
-                      ].map(row => (
-                        <div key={row.label} className={`flex justify-between items-center py-2 ${row.bold ? "border-t border-[#e2d9c8] pt-3 mt-1" : ""}`}>
-                          <span className={`text-sm ${row.bold ? "font-semibold text-[#1a1208]" : "text-[#7a6a50]"}`}>{row.label}</span>
-                          <span className={`font-mono font-semibold text-sm`} style={{ color: row.color }}>{fmtNaira(row.value)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
+    // Send notification to Super Admin
+    const notif: AppNotification = {
+      id: "notif_" + Date.now(),
+      title: "New Agent Verification Request",
+      message: `${app.name} (${app.agencyName}) submitted an onboarding application.`,
+      type: "agent",
+      targetRole: "owner",
+      timestamp: "Just now",
+      read: false,
+    };
+    updateNotifications([notif, ...notifications]);
+  };
 
-              {/* PAYMENTS TAB */}
-              {tab === "payments" && (
-                <div className="space-y-3 fade-in">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm font-semibold text-[#7a6a50]">{selected.payments.length} payment records</p>
-                    <button onClick={() => setShowAddPayment(true)}
-                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#c4601a] text-white text-xs font-semibold hover:bg-[#a84e14] transition-all">
-                      <Plus size={13}/> Log Payment
-                    </button>
-                  </div>
-                  {selected.payments.map(pay => (
-                    <div key={pay.id} className="card p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${pay.status === "paid" ? "bg-green-100" : pay.status === "overdue" ? "bg-red-100" : "bg-yellow-100"}`}>
-                            {pay.status === "paid" ? <CheckCircle size={16} className="text-green-600"/> : pay.status === "overdue" ? <AlertCircle size={16} className="text-red-600"/> : <Clock size={16} className="text-yellow-600"/>}
-                          </div>
-                          <div>
-                            <p className="text-sm font-semibold text-[#1a1208]">{pay.period}</p>
-                            <p className="text-xs text-[#7a6a50]">Due: {pay.dueDate}{pay.paidDate ? ` · Paid: ${pay.paidDate}` : ""}</p>
-                            {pay.receiptNo && <p className="text-xs text-[#7a6a50] font-mono">{pay.receiptNo}</p>}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <p className="font-mono font-bold text-[#1a1208]">{fmtNaira(pay.amount)}</p>
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_BADGE[pay.status]}`}>{pay.status}</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  {selected.payments.length === 0 && (
-                    <div className="card p-8 text-center text-[#7a6a50]">
-                      <FileText size={28} className="mx-auto mb-2 opacity-30"/>
-                      <p className="text-sm">No payment records yet. Log your first payment above.</p>
-                    </div>
-                  )}
-                </div>
-              )}
+  const handleUpdateAgentStatus = (id: string, newStatus: "approved" | "rejected") => {
+    const updated = agents.map((a) => (a.id === id ? { ...a, status: newStatus } : a));
+    updateAgents(updated);
 
-              {/* NOTES TAB */}
-              {tab === "notes" && (
-                <div className="fade-in">
-                  <div className="card p-5">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="font-display text-lg font-semibold text-[#1a1208]">Property Notes</h3>
-                      <p className="text-xs text-[#7a6a50]">Issues, agreements & disputes</p>
-                    </div>
-                    <textarea
-                      value={selected.notes}
-                      onChange={e => setProperties(prev => prev.map(p => p.id === selectedId ? {...p, notes: e.target.value} : p))}
-                      rows={8}
-                      placeholder="Record important details — defects on arrival, verbal agreements, dispute notes, repairs promised..."
-                      className="w-full bg-[#faf7f2] border border-[#e2d9c8] rounded-xl p-4 text-sm text-[#1a1208] placeholder-[#7a6a50] focus:outline-none focus:border-[#c4601a]/50 resize-none leading-relaxed"
-                    />
-                    <p className="text-xs text-[#7a6a50] mt-2">💡 Tip: Document defects when you move in. Take photos and list them here as evidence.</p>
-                  </div>
-                </div>
-              )}
-            </>
-          )}
+    // If approved, update verified badge across properties matching agent name
+    const targetAgent = agents.find((a) => a.id === id);
+    if (targetAgent && newStatus === "approved") {
+      const updatedProps = properties.map((p) => {
+        if (p.agentName && p.agentName.toLowerCase().includes(targetAgent.name.toLowerCase())) {
+          return { ...p, isAgentVerified: true };
+        }
+        return p;
+      });
+      updateProperties(updatedProps);
+    }
+  };
+
+  if (!isClient) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-[#fbf9f5] text-[#786953]">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <Building2 className="animate-spin text-[#0f4c81]" size={22} />
+          <span>Loading TrustRent Estate Environment...</span>
         </div>
       </div>
+    );
+  }
 
-      {/* ADD PAYMENT MODAL */}
-      {showAddPayment && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-          <div className="card w-full max-w-sm p-6 bg-white">
-            <div className="flex items-center justify-between mb-5">
-              <h3 className="font-display text-xl font-semibold text-[#1a1208]">Log Payment</h3>
-              <button onClick={() => setShowAddPayment(false)} className="text-[#7a6a50] hover:text-[#1a1208]"><X size={20}/></button>
-            </div>
-            <div className="space-y-4">
-              {[
-                { label: "Period (e.g. Apr 2026 – Mar 2027)", key: "period", type: "text", ph: "Apr 2026 – Mar 2027" },
-                { label: "Amount (₦)", key: "amount", type: "number", ph: "600000" },
-                { label: "Due Date", key: "dueDate", type: "date", ph: "" },
-                { label: "Paid Date (if paid)", key: "paidDate", type: "date", ph: "" },
-                { label: "Receipt / Teller No.", key: "receiptNo", type: "text", ph: "RCT-2026-001" },
-              ].map(f => (
-                <div key={f.key}>
-                  <label className="text-xs text-[#7a6a50] uppercase tracking-wide mb-1.5 block font-semibold">{f.label}</label>
-                  <input type={f.type} placeholder={f.ph}
-                    value={(payForm as Record<string,string>)[f.key]}
-                    onChange={e => setPayForm(prev => ({...prev, [f.key]: e.target.value}))}
-                    className="w-full bg-[#faf7f2] border border-[#e2d9c8] rounded-xl px-4 py-2.5 text-sm text-[#1a1208] focus:outline-none focus:border-[#c4601a]/50 transition-colors" />
+  return (
+    <div className="min-h-screen w-full flex flex-col bg-[#fbf9f5] relative overflow-x-hidden">
+      {/* GLOBAL NAVBAR: Clicking logo takes to homepage */}
+      <Navbar
+        currentRole={userRole}
+        session={session}
+        onSignOut={handleSignOut}
+        onNavigateHome={() => setUserRole("guest")}
+        onSelectRole={handleSwitchRole}
+        onOpenAuth={(mode, role) => {
+          setAuthMode(mode);
+          if (role) setAuthRoleTarget(role);
+          setShowAuthModal(true);
+        }}
+        notifications={notifications}
+        onMarkNotificationsRead={() => {
+          const marked = notifications.map((n) => ({ ...n, read: true }));
+          updateNotifications(marked);
+        }}
+      />
+
+      {/* ========================================================= */}
+      {/* VIEW 1: PUBLIC HOMEPAGE / MARKETPLACE */}
+      {/* ========================================================= */}
+      {userRole === "guest" && (
+        <LandingPage
+          properties={properties}
+          onSelectProperty={(p) => {
+            setSelectedId(p.id);
+            // If logged in as tenant, go to tenant portal; otherwise suggest sign in/up
+            if (session?.role === "tenant") {
+              setUserRole("tenant");
+            } else {
+              setAuthRoleTarget("tenant");
+              setUserRole("tenant");
+            }
+            showToast(`Viewing details for ${p.title || p.address}.`, "info");
+          }}
+          onApplyAgent={handleApplyAgent}
+          onOpenAuth={(mode) => {
+            setAuthMode(mode);
+            setShowAuthModal(true);
+          }}
+        />
+      )}
+
+      {/* ========================================================= */}
+      {/* AUTHENTICATION BARRIER FOR PROTECTED PORTALS */}
+      {/* ========================================================= */}
+      {userRole !== "guest" && (!session || session.role !== userRole) && (
+        <div className="w-full flex-1 flex items-center justify-center px-4 sm:px-6 lg:px-8 py-12">
+          <div className="glass-modal w-full max-w-xl p-6 sm:p-10 rounded-3xl border border-white/80 shadow-2xl space-y-6 text-center animate-in fade-in zoom-in-95 duration-200">
+            {/* Shield Icon Header */}
+            <div className="mx-auto w-16 h-16 rounded-3xl flex items-center justify-center text-white shadow-xl shadow-[#0f4c81]/20 transition-transform hover:scale-105">
+              {userRole === "owner" && (
+                <div className="w-full h-full rounded-3xl bg-gradient-to-tr from-[#c4601a] to-[#ea580c] flex items-center justify-center">
+                  <Shield size={32} />
                 </div>
-              ))}
-              <div>
-                <label className="text-xs text-[#7a6a50] uppercase tracking-wide mb-1.5 block font-semibold">Status</label>
-                <div className="flex gap-2">
-                  {(["paid","pending","overdue"] as PaymentStatus[]).map(s => (
-                    <button key={s} onClick={() => setPayForm(f => ({...f, status: s}))}
-                      className={`flex-1 py-2 rounded-xl text-xs font-semibold border capitalize transition-all ${payForm.status === s ? STATUS_BADGE[s] : "border-[#e2d9c8] text-[#7a6a50]"}`}>
-                      {s}
-                    </button>
-                  ))}
+              )}
+              {userRole === "agent" && (
+                <div className="w-full h-full rounded-3xl bg-gradient-to-tr from-[#0284c7] to-[#0ea5e9] flex items-center justify-center">
+                  <Briefcase size={32} />
+                </div>
+              )}
+              {userRole === "tenant" && (
+                <div className="w-full h-full rounded-3xl bg-gradient-to-tr from-[#0f4c81] to-[#2563eb] flex items-center justify-center">
+                  <Lock size={32} />
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <span className="text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full bg-[#0f4c81]/10 text-[#0f4c81]">
+                Protected Realm & Authentication Required
+              </span>
+              <h2 className="font-display font-extrabold text-2xl sm:text-3xl text-[#1b130a]">
+                {userRole === "owner" && "Super Admin Command Center"}
+                {userRole === "agent" && "Verified Real Estate Agent Portal"}
+                {userRole === "tenant" && "Secure Tenancy & Lease Portal"}
+              </h2>
+              <p className="text-xs sm:text-sm text-[#786953] leading-relaxed max-w-md mx-auto">
+                {userRole === "owner" &&
+                  "Access to multi-location property records, tenancy ledgers, and revenue accounting is restricted to verified property owners."}
+                {userRole === "agent" &&
+                  "Mandated property marketing, 10% commission ledgers, and client viewings require verified agency authentication."}
+                {userRole === "tenant" &&
+                  "Lease countdown alerts, PDF receipts vault, caution deposit recovery, and direct landlord communication are private to tenants."}
+              </p>
+            </div>
+
+            {/* Session Mismatch Warning Notice if signed into another role */}
+            {session && session.role !== userRole && (
+              <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs text-left flex items-start gap-2.5">
+                <ShieldAlert size={18} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">Active Session Mismatch</p>
+                  <p className="text-[11px] text-amber-800">
+                    You are currently signed in as <strong>{session.name || session.email}</strong> ({session.role.toUpperCase()}). Please sign in with an authorized account for this portal or sign up.
+                  </p>
                 </div>
               </div>
-              <button onClick={addPayment} className="w-full py-3 rounded-xl bg-[#c4601a] text-white font-semibold hover:bg-[#a84e14] transition-all">
-                Save Record
+            )}
+
+            {/* Features Preview Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-left pt-2">
+              {userRole === "owner" && (
+                <>
+                  <div className="p-3 rounded-2xl bg-white/70 border border-[#e6ddce] text-xs">
+                    <Building2 size={16} className="text-[#c4601a] mb-1.5" />
+                    <p className="font-bold text-[#1b130a]">Portfolio Tracking</p>
+                    <p className="text-[10px] text-[#786953]">All properties in one view</p>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-white/70 border border-[#e6ddce] text-xs">
+                    <TrendingUp size={16} className="text-[#166534] mb-1.5" />
+                    <p className="font-bold text-[#1b130a]">Revenue & Expenses</p>
+                    <p className="text-[10px] text-[#786953]">Cash flow & repairs ledger</p>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-white/70 border border-[#e6ddce] text-xs">
+                    <Megaphone size={16} className="text-[#0f4c81] mb-1.5" />
+                    <p className="font-bold text-[#1b130a]">Broadcast & Alerts</p>
+                    <p className="text-[10px] text-[#786953]">Issue receipts & notices</p>
+                  </div>
+                </>
+              )}
+              {userRole === "agent" && (
+                <>
+                  <div className="p-3 rounded-2xl bg-white/70 border border-[#e6ddce] text-xs">
+                    <ShieldCheck size={16} className="text-[#0284c7] mb-1.5" />
+                    <p className="font-bold text-[#1b130a]">Verified Badge</p>
+                    <p className="text-[10px] text-[#786953]">CAC & NIESV credentialed</p>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-white/70 border border-[#e6ddce] text-xs">
+                    <Award size={16} className="text-[#ca8a04] mb-1.5" />
+                    <p className="font-bold text-[#1b130a]">10% Commission</p>
+                    <p className="text-[10px] text-[#786953]">Automated agency payout</p>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-white/70 border border-[#e6ddce] text-xs">
+                    <Users size={16} className="text-[#0f4c81] mb-1.5" />
+                    <p className="font-bold text-[#1b130a]">Mandate Listings</p>
+                    <p className="text-[10px] text-[#786953]">Direct landlord partnership</p>
+                  </div>
+                </>
+              )}
+              {userRole === "tenant" && (
+                <>
+                  <div className="p-3 rounded-2xl bg-white/70 border border-[#e6ddce] text-xs">
+                    <Clock size={16} className="text-[#0f4c81] mb-1.5" />
+                    <p className="font-bold text-[#1b130a]">Glowing Timeline</p>
+                    <p className="text-[10px] text-[#786953]">Pulsating countdown bar</p>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-white/70 border border-[#e6ddce] text-xs">
+                    <FolderLock size={16} className="text-[#166534] mb-1.5" />
+                    <p className="font-bold text-[#1b130a]">Receipts & Vault</p>
+                    <p className="text-[10px] text-[#786953]">PDFs & defect photo proof</p>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-white/70 border border-[#e6ddce] text-xs">
+                    <ShieldAlert size={16} className="text-[#c4601a] mb-1.5" />
+                    <p className="font-bold text-[#1b130a]">Caution Recovery</p>
+                    <p className="text-[10px] text-[#786953]">Protect refundable deposit</p>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+              <button
+                onClick={() => {
+                  setAuthMode("login");
+                  setAuthRoleTarget(userRole);
+                  setShowAuthModal(true);
+                }}
+                className="w-full sm:w-auto px-6 py-3 rounded-2xl bg-gradient-to-r from-[#0f4c81] to-[#1e5a92] text-white text-xs font-bold shadow-lg shadow-[#0f4c81]/25 hover:from-[#0a365c] hover:to-[#0f4c81] transition-all transform active:scale-[0.99] flex items-center justify-center gap-2"
+              >
+                <Lock size={14} />
+                <span>
+                  Sign In to {userRole === "owner" ? "Super Admin" : userRole === "agent" ? "Agent Portal" : "Tenant Portal"}
+                </span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setAuthMode("signup");
+                  setAuthRoleTarget(userRole);
+                  setShowAuthModal(true);
+                }}
+                className="w-full sm:w-auto px-6 py-3 rounded-2xl bg-white border border-[#e6ddce] text-[#1b130a] text-xs font-bold hover:bg-[#faf6ef] transition-all shadow-sm flex items-center justify-center gap-2"
+              >
+                <UserCheck size={14} />
+                <span>Create New Account</span>
+              </button>
+            </div>
+
+            <div className="pt-2 border-t border-[#e6ddce]/60">
+              <button
+                onClick={() => setUserRole("guest")}
+                className="text-xs text-[#786953] hover:text-[#0f4c81] font-semibold transition-colors flex items-center justify-center gap-1 mx-auto"
+              >
+                ← Return to Public Marketplace
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ADD PROPERTY MODAL */}
-      {showAddProperty && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-          <div className="card w-full max-w-md p-6 bg-white max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-5">
-              <h3 className="font-display text-xl font-semibold text-[#1a1208]">Add Property</h3>
-              <button onClick={() => setShowAddProperty(false)} className="text-[#7a6a50] hover:text-[#1a1208]"><X size={20}/></button>
+      {/* ========================================================= */}
+      {/* VIEW 2: SUPER ADMIN SIDE (Property Owner / Landlord) */}
+      {/* ========================================================= */}
+      {userRole === "owner" && session && session.role === "owner" && (
+        <div className="w-full flex-1 flex flex-col">
+          {/* Super Admin Top Control Bar */}
+          <div className="w-full bg-[#1b130a] text-white px-4 lg:px-8 py-3.5 flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-2.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-[#c4601a] animate-pulse" />
+              <h2 className="font-display font-bold text-lg text-white">
+                Super Admin Portal • {ownerProfile.companyName || "Property Owner Command Center"}
+              </h2>
             </div>
-            <div className="space-y-4">
-              {[
-                { label: "Street Address", key: "address", type: "text", ph: "12B Okoye Close" },
-                { label: "Area / Estate", key: "area", type: "text", ph: "GRA" },
-                { label: "City", key: "city", type: "text", ph: "Benin City" },
-                { label: "Landlord Name", key: "landlordName", type: "text", ph: "Chief Emmanuel Eze" },
-                { label: "Landlord Phone", key: "landlordPhone", type: "tel", ph: "08031234567" },
-                { label: "Annual Rent (₦)", key: "rentAmount", type: "number", ph: "600000" },
-                { label: "Caution Fee (₦)", key: "cautionFee", type: "number", ph: "150000" },
-                { label: "Agent Fee (₦)", key: "agentFee", type: "number", ph: "60000" },
-                { label: "Lease Start", key: "startDate", type: "date", ph: "" },
-                { label: "Lease End", key: "endDate", type: "date", ph: "" },
-              ].map(f => (
-                <div key={f.key}>
-                  <label className="text-xs text-[#7a6a50] uppercase tracking-wide mb-1.5 block font-semibold">{f.label}</label>
-                  <input type={f.type} placeholder={f.ph}
-                    value={(propForm as Record<string,string>)[f.key]}
-                    onChange={e => setPropForm(prev => ({...prev, [f.key]: e.target.value}))}
-                    className="w-full bg-[#faf7f2] border border-[#e2d9c8] rounded-xl px-4 py-2.5 text-sm text-[#1a1208] focus:outline-none focus:border-[#c4601a]/50 transition-colors" />
-                </div>
-              ))}
-              <button onClick={addProperty} className="w-full py-3 rounded-xl bg-[#c4601a] text-white font-semibold hover:bg-[#a84e14] transition-all">
-                Add Property
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => setShowAddProperty(true)}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-[#c4601a] hover:bg-[#aa5014] text-white text-xs font-bold transition-all shadow-md"
+              >
+                <PlusCircle size={14} /> Add New Property
               </button>
             </div>
           </div>
+
+          {/* Super Admin Navigation Tabs */}
+          <div className="w-full px-4 lg:px-8 py-3 bg-white border-b border-[#e6ddce] flex items-center gap-2 overflow-x-auto">
+            {[
+              { id: "properties", label: "Properties Portfolio", icon: Building2 },
+              { id: "directory", label: "Tenants Directory", icon: Users },
+              { id: "revenue", label: "Revenue & Expense Ledger", icon: TrendingUp },
+              { id: "announcements", label: "Broadcast Announcements", icon: Megaphone },
+              { id: "agents", label: "Agent Approvals", icon: Award },
+              { id: "chat", label: "Direct Two-Way Messaging", icon: MessageSquare },
+              { id: "settings", label: "Profile & Settings", icon: Settings },
+            ].map((tab) => {
+              const Icon = tab.icon;
+              const isActive = adminTab === tab.id;
+
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setAdminTab(tab.id as typeof adminTab)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold transition-all whitespace-nowrap ${
+                    isActive
+                      ? "bg-[#0f4c81] text-white shadow-md shadow-[#0f4c81]/20"
+                      : "text-[#786953] hover:text-[#1b130a] hover:bg-[#faf6ef]"
+                  }`}
+                >
+                  <Icon size={14} />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Super Admin Body Views */}
+          <div className="w-full px-4 lg:px-8 py-6 flex-1">
+            {adminTab === "properties" && (
+              <div className="flex flex-col lg:flex-row gap-6 items-start">
+                <Sidebar
+                  properties={properties}
+                  selectedId={selectedId}
+                  onSelectProperty={(id) => setSelectedId(id)}
+                  onAddProperty={() => setShowAddProperty(true)}
+                  searchQuery={searchQuery}
+                />
+                <div className="flex-1 w-full space-y-6">
+                  {selectedProperty && (
+                    <>
+                      <PropertyHeader
+                        property={selectedProperty}
+                        onLogPayment={() => setShowAddPayment(true)}
+                        onEditProperty={() => setShowEditProperty(true)}
+                        onDeleteProperty={() => setDeletePropertyConfirm(true)}
+                        onPrintStatement={() => {
+                          if (selectedProperty.payments.length > 0) {
+                            setViewingReceipt(selectedProperty.payments[0]);
+                          } else {
+                            showToast("Log at least one payment to generate a receipt.", "warning");
+                          }
+                        }}
+                      />
+                      <OverviewTab property={selectedProperty} />
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {adminTab === "directory" && (
+              <AdminTenantDirectory
+                properties={properties}
+                onOpenChat={(propId) => {
+                  setSelectedId(propId);
+                  setAdminTab("chat");
+                }}
+                onIssueReceipt={(prop) => {
+                  setSelectedId(prop.id);
+                  setShowAdminIssueReceipt(true);
+                }}
+              />
+            )}
+
+            {adminTab === "revenue" && (
+              <AdminRevenueExpenses
+                properties={properties}
+                onAddExpense={handleAddExpense}
+              />
+            )}
+
+            {adminTab === "announcements" && (
+              <AdminAnnouncements
+                announcements={announcements}
+                onAddAnnouncement={handleAddAnnouncement}
+                onDeleteAnnouncement={(id) =>
+                  updateAnnouncements(announcements.filter((a) => a.id !== id))
+                }
+              />
+            )}
+
+            {adminTab === "agents" && (
+              <AdminAgentApprovals
+                agents={agents}
+                onUpdateStatus={handleUpdateAgentStatus}
+              />
+            )}
+
+            {adminTab === "chat" && selectedProperty && (
+              <TwoWayChat
+                propertyId={selectedProperty.id}
+                propertyAddress={selectedProperty.address}
+                userRole="owner"
+                userName={selectedProperty.landlordName}
+                chats={chats}
+                conversationSettings={selectedProperty.conversationSettings}
+                onSendMessage={handleSendMessage}
+                onToggleLock={handleToggleChatLock}
+              />
+            )}
+
+            {adminTab === "settings" && (
+              <OwnerProfileSettings
+                profile={ownerProfile}
+                onSave={handleSaveOwnerProfile}
+              />
+            )}
+          </div>
         </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* VIEW 3: TENANT SIDE PORTAL */}
+      {/* ========================================================= */}
+      {userRole === "tenant" && session && session.role === "tenant" && (
+        <div className="w-full flex-1 flex flex-col">
+          {/* Tenant Top Bar */}
+          <div className="w-full bg-[#0f4c81] text-white px-4 lg:px-8 py-3.5 flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-2.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+              <h2 className="font-display font-bold text-lg text-white">
+                Tenant Portal • {selectedProperty?.address || "Active Lease"}
+              </h2>
+            </div>
+            <div className="text-xs text-white/80">
+              Logged in as: <strong>{tenantProfile.name}</strong> • Landlord: <strong>{selectedProperty?.landlordName}</strong> ({selectedProperty?.landlordPhone})
+            </div>
+          </div>
+
+          {/* Tenant Navigation Tabs */}
+          <div className="w-full px-4 lg:px-8 py-3 bg-white border-b border-[#e6ddce] flex items-center gap-2 overflow-x-auto">
+            {[
+              { id: "countdown", label: "Lease Timeline & Alerts", icon: Clock },
+              { id: "vault", label: "Documents & PDF Receipts", icon: FolderLock },
+              { id: "payments", label: "Payment History", icon: CreditCard },
+              { id: "defects", label: "Move-in Defects & Photos", icon: Camera },
+              { id: "caution", label: "Caution Fee Recovery", icon: ShieldAlert },
+              { id: "chat", label: "Chat with Landlord", icon: MessageSquare },
+              { id: "notes", label: "Notes & Letters", icon: FileText },
+              { id: "profile", label: "Profile & Settings", icon: Settings },
+            ].map((tab) => {
+              const Icon = tab.icon;
+              const isActive = tenantTab === tab.id;
+
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setTenantTab(tab.id as typeof tenantTab)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold transition-all whitespace-nowrap ${
+                    isActive
+                      ? "bg-[#0f4c81] text-white shadow-md shadow-[#0f4c81]/20"
+                      : "text-[#786953] hover:text-[#1b130a] hover:bg-[#faf6ef]"
+                  }`}
+                >
+                  <Icon size={14} />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Tenant Body Views */}
+          <div className="w-full px-4 lg:px-8 py-6 flex-1 space-y-6">
+            {selectedProperty ? (
+              <>
+                {tenantTab === "countdown" && (
+                  <div className="space-y-6">
+                    {/* Glowing Pulsating Timeline Bar */}
+                    <TenantLeaseCountdown
+                      property={selectedProperty}
+                      onSendRenewalInquiry={() => setTenantTab("chat")}
+                    />
+                    <OverviewTab property={selectedProperty} />
+                  </div>
+                )}
+
+                {tenantTab === "vault" && (
+                  <TenantDocumentsVault
+                    property={selectedProperty}
+                    onUpdateDocuments={(docs) => {
+                      const updatedProp = { ...selectedProperty, documents: docs };
+                      handleSaveProperty(updatedProp);
+                    }}
+                    onViewReceipt={(p) => setViewingReceipt(p)}
+                  />
+                )}
+
+                {tenantTab === "payments" && (
+                  <PaymentsTab
+                    property={selectedProperty}
+                    onAddPayment={() => setShowAddPayment(true)}
+                    onDeletePayment={handleDeletePayment}
+                    onTogglePaymentStatus={handleTogglePaymentStatus}
+                    onViewReceipt={(p) => setViewingReceipt(p)}
+                  />
+                )}
+
+                {tenantTab === "defects" && (
+                  <DefectsTab
+                    property={selectedProperty}
+                    onUpdateDefects={(defects) => {
+                      const updatedProp = { ...selectedProperty, defects };
+                      handleSaveProperty(updatedProp);
+                    }}
+                  />
+                )}
+
+                {tenantTab === "caution" && (
+                  <CautionTrackerTab
+                    property={selectedProperty}
+                    onUpdateCautionTracker={(tracker) => {
+                      const updatedProp = { ...selectedProperty, cautionTracker: tracker };
+                      handleSaveProperty(updatedProp);
+                    }}
+                  />
+                )}
+
+                {tenantTab === "chat" && (
+                  <TwoWayChat
+                    propertyId={selectedProperty.id}
+                    propertyAddress={selectedProperty.address}
+                    userRole="tenant"
+                    userName={tenantProfile.name || "Tenant"}
+                    chats={chats}
+                    conversationSettings={selectedProperty.conversationSettings}
+                    onSendMessage={handleSendMessage}
+                    onToggleLock={handleToggleChatLock}
+                  />
+                )}
+
+                {tenantTab === "notes" && (
+                  <NotesTab
+                    property={selectedProperty}
+                    onSaveNotes={(notes) => {
+                      const updatedProp = { ...selectedProperty, notes };
+                      handleSaveProperty(updatedProp);
+                    }}
+                  />
+                )}
+
+                {tenantTab === "profile" && (
+                  <TenantProfileSettings
+                    profile={tenantProfile}
+                    onSave={handleSaveTenantProfile}
+                  />
+                )}
+              </>
+            ) : (
+              <div className="card p-12 text-center text-[#786953]">
+                No property selected.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* VIEW 4: AGENT SIDE PORTAL */}
+      {/* ========================================================= */}
+      {userRole === "agent" && session && session.role === "agent" && (
+        <div className="w-full flex-1 flex flex-col">
+          <AgentDashboard
+            properties={properties}
+            agentProfile={agentProfile}
+            onSaveAgentProfile={handleSaveAgentProfile}
+            onSelectProperty={(property) => {
+              setSelectedId(property.id);
+            }}
+          />
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* GLOBAL MODALS */}
+      {/* ========================================================= */}
+      {showAuthModal && (
+        <AuthModal
+          initialMode={authMode}
+          initialRole={authRoleTarget}
+          onClose={() => setShowAuthModal(false)}
+          onSuccess={handleAuthSuccess}
+        />
+      )}
+
+      {showAddProperty && (
+        <AddPropertyModal
+          onClose={() => setShowAddProperty(false)}
+          onAddProperty={handleAddProperty}
+        />
+      )}
+
+      {showEditProperty && selectedProperty && (
+        <EditPropertyModal
+          property={selectedProperty}
+          onClose={() => setShowEditProperty(false)}
+          onSaveProperty={handleSaveProperty}
+        />
+      )}
+
+      {showAddPayment && selectedProperty && (
+        <AddPaymentModal
+          property={selectedProperty}
+          onClose={() => setShowAddPayment(false)}
+          onAddPayment={handleAddPayment}
+        />
+      )}
+
+      {showAdminIssueReceipt && selectedProperty && (
+        <AdminIssueReceiptModal
+          property={selectedProperty}
+          onClose={() => setShowAdminIssueReceipt(false)}
+          onReceiptIssued={handleIssueReceiptByOwner}
+        />
+      )}
+
+      {viewingReceipt && selectedProperty && (
+        <ReceiptModal
+          property={selectedProperty}
+          payment={viewingReceipt}
+          onClose={() => setViewingReceipt(null)}
+        />
+      )}
+
+      {deletePropertyConfirm && selectedProperty && (
+        <DeleteConfirmModal
+          title="Delete Property Record?"
+          message={`Are you sure you want to permanently delete "${selectedProperty.address}" and all associated tenant records?`}
+          onConfirm={handleDeleteSelectedProperty}
+          onClose={() => setDeletePropertyConfirm(false)}
+        />
       )}
     </div>
   );
